@@ -55,8 +55,18 @@ struct Stamp
     int faultError = 0;
 };
 
+inline bool PressureEnabled()
+{
+    static const bool enabled = [] {
+        const char* value = std::getenv("DACS_READ_PRESSURE_TRACE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    return enabled;
+}
+
 inline Stamp Snapshot()
 {
+    if (!PressureEnabled()) return {{0, ENODATA}, 0, 0, ENODATA};
     const int savedErrno = errno;
     Stamp result;
     const int descriptor = open("/proc/thread-self/schedstat", O_RDONLY | O_CLOEXEC);
@@ -95,10 +105,10 @@ inline uint64_t dumpedIndex = 0;
 inline bool Enabled()
 {
     static const bool enabled = [] {
-        const char* value = std::getenv("DACS_READ_PRESSURE_TRACE");
+        const char* value = std::getenv("DACS_THREAD_CPU_TRACE");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
-    return enabled;
+    return enabled || PressureEnabled();
 }
 
 inline uint64_t Reserve()
@@ -126,7 +136,8 @@ inline uint64_t Begin(const char* stage, uint64_t bytes, uint64_t start, uint64_
     event.startNs = start;
     event.pendingStart = pending;
     event.before = Snapshot();
-    event.tid = static_cast<uint64_t>(syscall(SYS_gettid));
+    static thread_local const auto tid = static_cast<uint64_t>(syscall(SYS_gettid));
+    event.tid = tid;
     errno = savedErrno;
     return index;
 }

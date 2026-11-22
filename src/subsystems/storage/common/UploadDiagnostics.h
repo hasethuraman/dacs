@@ -50,7 +50,7 @@ enum Stage
     AlignedAlloc, AlignedFree, ServerUpload, ServerBufferAlloc, ServerBufferFree,
     ServerRecv, ServerWrite, ServerFsync, ServerMetadata, ServerReply,
     ServerRename, ServerIndex, ServerTempCreate, ServerFileClose, ServerFdatasync, Drain,
-    ProbeConnect, ProbeSend, ProbeResponse, UploadIdleWait, ReplayWait, Observer, Count
+    ProbeConnect, ProbeSend, ProbeResponse, UploadIdleWait, ReplayWait, Count
 };
 
 inline constexpr std::array<const char*, Count> stageNames = {
@@ -60,7 +60,7 @@ inline constexpr std::array<const char*, Count> stageNames = {
     "server_buffer_alloc", "server_buffer_free", "server_recv", "server_write",
     "server_fsync", "server_metadata", "server_reply", "server_rename",
     "server_index", "server_temp_create", "server_file_close", "server_fdatasync", "drain",
-    "probe_connect", "probe_send", "probe_response", "upload_idle_wait", "replay_wait", "observer"};
+    "probe_connect", "probe_send", "probe_response", "upload_idle_wait", "replay_wait"};
 
 inline bool Enabled()
 {
@@ -206,7 +206,6 @@ inline void Record(Stage stage, uint64_t bytes, uint64_t wallNs, uint64_t cpuNs 
 }
 
 class Scope;
-inline void MaybeLog();
 inline thread_local Scope* currentScope = nullptr;
 class Scope
 {
@@ -259,7 +258,6 @@ public:
                 if (reads % 100 == 0) SampleMemory(reads);
             }
             m_start = 0;
-            if (m_stage == Read || m_stage == Upload || m_stage == Wrapper) MaybeLog();
             errno = savedErrno;
         }
     }
@@ -282,12 +280,10 @@ inline void Log(const char* snapshot = "periodic")
 {
     if (!Enabled()) return;
     if (std::strcmp(snapshot, "start") == 0) SampleMemory(0);
-    if (std::strcmp(snapshot, "shutdown") == 0)
-    {
-        SampleMemory(completedReads.load());
-        readpressure::Dump();
-        if (readpressure::Enabled()) DumpMemory();
-    }
+    const bool final = std::strcmp(snapshot, "shutdown") == 0;
+    if (final) SampleMemory(completedReads.load());
+    readpressure::Dump(final);
+    if (readpressure::Enabled()) DumpMemory(final);
     for (size_t i = 0; i < Count; ++i)
     {
         const auto& c = counters[i];
@@ -333,22 +329,6 @@ inline void Log(const char* snapshot = "periodic")
         (unsigned long long)heap.arena, (unsigned long long)heap.hblks,
         (unsigned long long)heap.hblkhd, (unsigned long long)heap.uordblks,
         (unsigned long long)heap.fordblks, (unsigned long long)Now(), snapshot);
-}
-inline std::mutex logMutex;
-inline uint64_t lastLogNs = 0;
-inline void MaybeLog()
-{
-    Scope observer(Observer);
-    std::lock_guard<std::mutex> lock(logMutex);
-    // Emit completed ranges while the worker is alive; abrupt exits need not run C++ destructors.
-    readpressure::Dump(false);
-    if (readpressure::Enabled()) DumpMemory(false);
-    const auto now = Now();
-    if (now - lastLogNs >= 250000000ULL)
-    {
-        Log("periodic");
-        lastLogNs = now;
-    }
 }
 struct FinalSnapshot
 {

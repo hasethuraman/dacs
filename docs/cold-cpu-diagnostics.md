@@ -5,8 +5,10 @@ uploads, change upload worker defaults, change requested read sizes, or add a
 foreground shutdown/population barrier.
 
 Enable `DACS_UPLOAD_DIAGNOSTICS=1` for stage counters and
-`DACS_READ_PRESSURE_TRACE=1` for bounded per-operation timestamps, scheduler wait
-and fault deltas. Both default to disabled. Keep OpenMP settings unchanged.
+`DACS_THREAD_CPU_TRACE=1` for bounded per-operation CPU/timestamp records and
+100-read memory samples. Optional `DACS_READ_PRESSURE_TRACE=1` additionally
+collects procfs scheduler wait and fault deltas; it is not needed for CPU timing.
+All diagnostics default to disabled. Keep OpenMP settings unchanged.
 
 Each scope measures `CLOCK_THREAD_CPUTIME_ID` and monotonic wall time. Inclusive
 CPU contains nested scopes; exclusive CPU subtracts their inclusive CPU.
@@ -14,16 +16,18 @@ Foreground, replay, uploader, and unknown roles are reported separately.
 Passive upload queue latency has zero attributed CPU. Condition-variable waits
 measure caller CPU and elapsed time, not CPU spent while blocked.
 
-Completed trace ranges are emitted during reads and uploads, rather than only
-at process destruction. Version-4 batches carry `first_index`, `next_index`,
+Numeric trace ranges are buffered during operations and emitted from existing
+StreamingClient statistics calls and shutdown, not formatted per read or upload.
+Version-4 batches carry `first_index`, `next_index`,
 and `total_reserved`; an unfinished earlier operation delays later records.
 Final snapshots identify incomplete and dropped records. Reject measurements
 with diagnostic errors, dropped records, or an incomplete final trace.
 
-The `observer` stage measures emission and logging-lock acquisition. It is not
-all instrumentation overhead: boundary clocks, counters, scheduler/fault
-snapshots, and memory sampling also cost CPU. Compare enabled and disabled
-sanity runs before interpreting small differences. Do not add overlapping
+Boundary clocks, counters, and optional memory/pressure sampling still cost
+CPU; zero-overhead instrumentation is not claimed. There are no new observer
+threads, no per-operation log flushes, and no clocks inside polling iterations.
+Compare enabled and disabled sanity runs before interpreting small differences.
+Do not add overlapping
 inclusive DACS, RunAI clone, and OpenMP work measurements together.
 
 Process memory is sampled at initialization, every 100 positive-byte foreground

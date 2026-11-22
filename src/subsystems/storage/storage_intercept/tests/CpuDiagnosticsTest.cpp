@@ -138,3 +138,31 @@ TEST(CpuDiagnosticsTest, MemoryCadenceCountsForegroundCallbacksNotReplay)
     EXPECT_EQ(uploaddiag::completedReads.load() - before, sampled ? 100U : 0U);
     EXPECT_EQ(uploaddiag::memoryNext.load() - samples, sampled ? 1U : 0U);
 }
+
+TEST(CpuDiagnosticsTest, CpuOnlyTraceKeepsPressureCountersExplicitlyUnavailable)
+{
+    if (!readpressure::Enabled() || readpressure::PressureEnabled()) return;
+    const auto index = readpressure::Begin("blob", 4096, uploaddiag::Now(), 0, "foreground");
+    ASSERT_LT(index, readpressure::Capacity);
+    readpressure::Finish(index, readpressure::Snapshot(), uploaddiag::Now(), 123, 0, 123);
+    const auto& event = readpressure::events[index];
+    ASSERT_TRUE(event.ready.load());
+    EXPECT_EQ(event.cpuNs, 123U);
+    EXPECT_EQ(event.exclusiveCpuNs, 123U);
+    EXPECT_EQ(event.queueError, ENODATA);
+    EXPECT_EQ(event.faultError, ENODATA);
+}
+
+TEST(CpuDiagnosticsTest, OperationCompletionBuffersWithoutAutomaticEmission)
+{
+    const auto before = readpressure::dumpedIndex;
+    {
+        uploaddiag::RoleScope role(uploaddiag::Foreground);
+        uploaddiag::Scope read(uploaddiag::Read, 4096);
+    }
+    EXPECT_EQ(readpressure::dumpedIndex, before);
+    if (!uploaddiag::Enabled() || !readpressure::Enabled()) return;
+    EXPECT_GT(readpressure::next.load(), before);
+    readpressure::Dump(false);
+    EXPECT_EQ(readpressure::dumpedIndex, readpressure::next.load());
+}

@@ -1890,6 +1890,7 @@ void StreamingClient::LogStats()
 //---------------------------------------------------------------------------------------------------------------------
 void StreamingClient::LogReadChunkStats()
 {
+    uploaddiag::Log("periodic");
     LOG_INFO("ReadChunk stats: MountName={} ChunkSize={} Total={} PrefetchCache={} RemoteCache={} RemoteClient={}"
         " ZeroCopy={} SubChunk={}",
         m_strMountName,
