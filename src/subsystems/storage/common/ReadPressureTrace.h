@@ -84,6 +84,7 @@ inline Stamp Snapshot()
     return result;
 }
 
+enum class DumpState : uint8_t { Pending, Selected, Emitted };
 struct Event
 {
     const char* stage = nullptr;
@@ -95,6 +96,7 @@ struct Event
     Stamp before;
     int queueError = 0, faultError = 0;
     std::atomic<bool> ready{false};
+    DumpState dumpState = DumpState::Pending;
 };
 
 inline std::array<Event, Capacity> events;
@@ -175,16 +177,23 @@ inline void Dump(bool final = true)
     if (!Enabled()) return;
     std::lock_guard<std::mutex> lock(dumpMutex);
     const auto count = std::min(next.load(), Capacity);
-    uint64_t end = dumpedIndex;
-    while (end < count && events[end].ready.load(std::memory_order_acquire)) ++end;
-    if (end == dumpedIndex && !final) return;
+    uint64_t completed = 0, incomplete = 0;
+    for (uint64_t index = dumpedIndex; index < count; ++index)
+        if (events[index].dumpState == DumpState::Pending)
+        {
+            if (events[index].ready.load(std::memory_order_acquire))
+            { events[index].dumpState = DumpState::Selected; ++completed; }
+            else ++incomplete;
+        }
+    if (completed == 0 && !final) return;
     std::fprintf(stderr, "DACS_READ_TRACE_BEGIN version=4 capacity=%llu events=%llu dropped=%llu first_index=%llu total_reserved=%llu final=%d\n",
-        (unsigned long long)Capacity, (unsigned long long)(end - dumpedIndex),
+        (unsigned long long)Capacity, (unsigned long long)completed,
         (unsigned long long)dropped.load(), (unsigned long long)dumpedIndex,
         (unsigned long long)count, final ? 1 : 0);
-    for (uint64_t index = dumpedIndex; index < end; ++index)
+    for (uint64_t index = dumpedIndex; index < count; ++index)
     {
-        const auto& event = events[index];
+        auto& event = events[index];
+        if (event.dumpState != DumpState::Selected) continue;
         std::fprintf(stderr,
             "DACS_READ_TRACE stage=%s tid=%llu bytes=%llu start_ns=%llu end_ns=%llu cpu_ns=%llu runqueue_ns=%llu pending_start=%llu pending_end=%llu minor_faults=%llu major_faults=%llu runqueue_error=%d fault_error=%d role=%s exclusive_cpu_ns=%llu pid=%ld\n",
             event.stage, (unsigned long long)event.tid, (unsigned long long)event.bytes,
@@ -194,11 +203,12 @@ inline void Dump(bool final = true)
             (unsigned long long)event.minorFaults, (unsigned long long)event.majorFaults,
             event.queueError, event.faultError, event.role,
             (unsigned long long)event.exclusiveCpuNs, static_cast<long>(getpid()));
+        event.dumpState = DumpState::Emitted;
     }
+    while (dumpedIndex < count && events[dumpedIndex].dumpState == DumpState::Emitted) ++dumpedIndex;
     std::fprintf(stderr, "DACS_READ_TRACE_END events=%llu incomplete=%llu dropped=%llu next_index=%llu total_reserved=%llu final=%d\n",
-        (unsigned long long)(end - dumpedIndex), (unsigned long long)(final ? count - end : 0),
-        (unsigned long long)dropped.load(), (unsigned long long)end,
+        (unsigned long long)completed, (unsigned long long)(final ? incomplete : 0),
+        (unsigned long long)dropped.load(), (unsigned long long)dumpedIndex,
         (unsigned long long)count, final ? 1 : 0);
-    dumpedIndex = end;
 }
 }

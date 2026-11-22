@@ -118,6 +118,22 @@ TEST(CpuDiagnosticsTest, IncrementalDumpRetainsUnfinishedEvents)
     EXPECT_EQ(readpressure::dumpedIndex, index + 1);
 }
 
+TEST(CpuDiagnosticsTest, IdleWaitDoesNotBlockCompletedPayloadRecords)
+{
+    if (!readpressure::Enabled()) return;
+    const auto idle = readpressure::Begin("upload_idle_wait", 0, uploaddiag::Now(), 0);
+    const auto payload = readpressure::Begin("blob", 4096, uploaddiag::Now(), 0);
+    ASSERT_LT(payload, readpressure::Capacity);
+    readpressure::Finish(payload, readpressure::Snapshot(), uploaddiag::Now(), 0, 0);
+    readpressure::Dump(false);
+    EXPECT_EQ(readpressure::events[idle].dumpState, readpressure::DumpState::Pending);
+    EXPECT_EQ(readpressure::events[payload].dumpState, readpressure::DumpState::Emitted);
+    EXPECT_LE(readpressure::dumpedIndex, idle);
+    readpressure::Finish(idle, readpressure::Snapshot(), uploaddiag::Now(), 0, 0);
+    readpressure::Dump(false);
+    EXPECT_EQ(readpressure::dumpedIndex, payload + 1);
+}
+
 TEST(CpuDiagnosticsTest, MemoryCadenceCountsForegroundCallbacksNotReplay)
 {
     const auto before = uploaddiag::completedReads.load();
