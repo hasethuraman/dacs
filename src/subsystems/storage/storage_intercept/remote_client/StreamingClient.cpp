@@ -23,6 +23,7 @@
 #include "StorageInterceptConstants.h"
 #include "StorageInterceptUtils.h"
 #include "RemoteClientException.h"
+#include "UploadDiagnostics.h"
 #include <cstring>
 #include <algorithm>
 #include <numeric>
@@ -313,6 +314,7 @@ ssize_t StreamingClient::ReadFile(
     }
 
     UpdateReadStats(readSize, false);
+    uploaddiag::Scope readTimer(uploaddiag::Read, readSize);
 
     if (readOffset >= fileSize)
     {
@@ -865,10 +867,10 @@ ssize_t StreamingClient::ReadChunkAndCopyToBuffer(
             bufSize);
         if (copySize > 0)
         {
-            memcpy(
+            uploaddiag::Copy(
                 (char*)pUserBuf,
                 readChunkData->Buffer.get() + chunkCopyOffset,
-                copySize);
+                copySize, uploaddiag::ReturnCopy);
         }
         LOG_DEBUG("Copied into caller buffer. chunkOffset={} chunkCopyOffset={} copySize={}",
             chunkOffset,
@@ -889,6 +891,7 @@ CacheStatus StreamingClient::ProbeCacheServerWithRetry(
     uint64_t& readLength,
     const std::string& version)
 {
+    uploaddiag::Scope probeTimer(uploaddiag::Probe, length);
     CacheStatus cacheStatus = CacheStatus::NOTFOUND;
     auto cacheClient = std::atomic_load(&m_spCacheClient);
     if (!cacheClient)
@@ -960,6 +963,7 @@ ssize_t StreamingClient::DownloadFullChunkFromBlob(
     off64_t chunkOffset,
     FileData& readData)
 {
+    uploaddiag::Scope blobTimer(uploaddiag::Blob, m_nChunkSize);
     STORAGE_ASSERT(chunkOffset % m_nChunkSize == 0, "DownloadFullChunkFromBlob called with unaligned chunkOffset");
 
     // NOTE: This function downloads into readData.Buffer regardless of ownership.
@@ -1006,7 +1010,8 @@ std::optional<ssize_t> StreamingClient::TrySubChunkRead(
     {
         const size_t availableBytes = prefetchResult->BufferSize - chunkCopyOffset;
         const size_t copySize = std::min(bufSize, availableBytes);
-        memcpy(pUserBuf, prefetchResult->Buffer.get() + chunkCopyOffset, copySize);
+        uploaddiag::Copy(pUserBuf, prefetchResult->Buffer.get() + chunkCopyOffset,
+            copySize, uploaddiag::ReturnCopy);
         m_nReadChunksSubChunk++;
         m_nReadChunksTotal++;
         m_nReadChunksPrefetchCache++;
@@ -1070,7 +1075,8 @@ std::optional<ssize_t> StreamingClient::TrySubChunkRead(
     const size_t copySize = std::min(bufSize, availableBytes);
     if (copySize > 0)
     {
-        memcpy(pUserBuf, remoteReadData->Buffer.get() + chunkCopyOffset, copySize);
+        uploaddiag::Copy(pUserBuf, remoteReadData->Buffer.get() + chunkCopyOffset,
+            copySize, uploaddiag::ReturnCopy);
     }
     m_nReadChunksSubChunk++;
     m_nReadChunksTotal++;
@@ -1196,9 +1202,9 @@ std::shared_ptr<const FileData> StreamingClient::ReadChunkImpl(
                 nullptr,
                 false /* setToZeros */);
 
-        memcpy(bufferForCacheUpload->Buffer.get(),
+        uploaddiag::Copy(bufferForCacheUpload->Buffer.get(),
                remoteReadData->Buffer.get(),
-               remoteReadData->BufferSize);
+               remoteReadData->BufferSize, uploaddiag::PartCopy);
     }
 
     // upload to cache server if this client owns the cache key

@@ -44,6 +44,7 @@
 #include "ContentHandler.h"
 #include "StorageInterceptConstants.h"
 #include "StorageInterceptLogger.h"
+#include "UploadDiagnostics.h"
 
 namespace
 {
@@ -418,6 +419,8 @@ ssize_t blob_read(
     char* error_buf,
     size_t error_buf_size)
 {
+    uploaddiag::RoleScope role(uploaddiag::Foreground);
+    uploaddiag::Scope wrapperTimer(uploaddiag::Wrapper, length);
     if (!account || !blob || !container || !buf)
     {
         set_error(error_buf, error_buf_size, "null argument");
@@ -467,7 +470,9 @@ ssize_t blob_read(
 
     // Open, read, and close per call — no fd caching
     char* open_error = nullptr;
+    uploaddiag::Scope openTimer(uploaddiag::Open);
     int fd = SI_open(cache_path.c_str(), O_RDONLY, 0, &open_error);
+    openTimer.Stop();
     if (fd < 0)
     {
         if (open_error)
@@ -487,7 +492,9 @@ ssize_t blob_read(
 
     // Always close the fd after reading
     char* close_error = nullptr;
+    uploaddiag::Scope closeTimer(uploaddiag::Close);
     SI_close(fd, &close_error);
+    closeTimer.Stop();
     if (close_error)
     {
         LOG_WARN("blob_read: SI_close failed for '{}': {}", cache_path, close_error);

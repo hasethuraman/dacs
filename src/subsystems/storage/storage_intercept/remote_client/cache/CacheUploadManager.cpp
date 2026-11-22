@@ -19,6 +19,7 @@
 #include "cache.pb.h"
 #include "CacheUtils.h"
 #include "ICacheClient.h"
+#include "UploadDiagnostics.h"
 #include <limits>
 #include <thread>
 #include <utility>
@@ -42,6 +43,14 @@ CacheUploadManager::CacheUploadManager(
             m_stop(false),
             m_spCacheClientImpl(std::move(spCacheClientImpl))
 {
+    if (uploaddiag::Enabled())
+    {
+        static std::atomic<uint64_t> nextId{0};
+        m_diagnosticId = nextId.fetch_add(1) + 1;
+        std::fprintf(stderr, "DACS_CPU_MANAGER pid=%ld manager=%llu workers=%d synchronous=%d\n",
+            static_cast<long>(getpid()), (unsigned long long)m_diagnosticId,
+            m_numUploadThreads, m_enableSyncUpload);
+    }
     // start worker threads
     if (!m_enableSyncUpload)
     {
@@ -74,10 +83,17 @@ CacheUploadManager::~CacheUploadManager()
             uploadThread->join();
         }
     }
+    if (uploaddiag::Enabled())
+        std::fprintf(stderr, "DACS_CPU_MANAGER_FINAL pid=%ld manager=%llu requests=%llu bytes=%llu failures=%llu pending_bytes=%llu\n",
+            static_cast<long>(getpid()), (unsigned long long)m_diagnosticId,
+            (unsigned long long)m_diagnosticRequests.load(), (unsigned long long)m_diagnosticBytes.load(),
+            (unsigned long long)m_diagnosticFailures.load(), (unsigned long long)m_uploadBufferMemory.load());
 }
 //---------------------------------------------------------------------------------------------------------------------
 bool CacheUploadManager::StartUpload(unique_ptr<UploadContext> uploadContext)
 {
+    uploaddiag::Scope uploadTimer(uploaddiag::Upload,
+        uploadContext->m_fileData ? uploadContext->m_fileData->BufferSize : 0);
     // Long enough to hold string representation of std::size_t in base 10 (18446744073709551615)
     // which is 21 characters
     static thread_local char arrFileSizeBuffer[32];
@@ -156,20 +172,33 @@ bool CacheUploadManager::StartUpload(unique_ptr<UploadContext> uploadContext)
         metadata.nKeyValuePairs > 0 ? &metadata : nullptr,
         uploadContext->m_encryptionKey.empty() ? nullptr : uploadContext->m_encryptionKey.c_str());
 
+    if (uploaddiag::Enabled())
+    {
+        m_diagnosticRequests.fetch_add(1);
+        m_diagnosticBytes.fetch_add(bufferSizeToSend);
+        if (status != CacheClientStatus::SUCCESS)
+        {
+            m_diagnosticFailures.fetch_add(1);
+            uploaddiag::failures.fetch_add(1);
+        }
+    }
     return (status == CacheClientStatus::SUCCESS);
 }
 //---------------------------------------------------------------------------------------------------------------------
 void CacheUploadManager::UploadWorker()
 {
+    uploaddiag::RoleScope role(uploaddiag::Uploader);
     LOG_DEBUG("Started UploadWorker");
     while (!m_stop)
     {
         std::unique_lock<std::mutex> lock(m_mutexQueue);
+        uploaddiag::Scope idleTimer(uploaddiag::UploadIdleWait);
         m_cvQueue.wait(lock,
             [this]
             {
                 return this->m_stop || (this->m_uploadQueue.size() > 0);
             });
+        idleTimer.Stop();
         if (m_stop)
         {
             break;
@@ -187,6 +216,13 @@ void CacheUploadManager::UploadWorker()
         if (uploadContext != nullptr)
         {
             size_t bufferSizeToSend = uploadContext->m_fileData.get() ? uploadContext->m_fileData->BufferSize : 0;
+            if (uploaddiag::Enabled())
+            {
+                if (uploadContext->m_diagnosticQueuedNs != 0)
+                    uploaddiag::Record(uploaddiag::QueueWait, bufferSizeToSend,
+                        uploaddiag::Now() - uploadContext->m_diagnosticQueuedNs);
+                uploaddiag::pendingBytes.fetch_sub(bufferSizeToSend);
+            }
             StartUpload(std::move(uploadContext));
             m_uploadBufferMemory -= bufferSizeToSend;
         }
@@ -205,6 +241,8 @@ bool CacheUploadManager::Upload(
     const std::string& filePath,
     const std::string& version)
 {
+    uploaddiag::Scope enqueueTimer(uploaddiag::Enqueue,
+        fileData ? fileData->BufferSize : 0);
     bool useSync = m_enableSyncUpload || isWrite; // Writes to cache are always sync
 
     if (useSync)
@@ -231,6 +269,12 @@ bool CacheUploadManager::Upload(
             auto uploadContext = make_unique<UploadContext>(
                 mountName, cacheKey, fileData, strEncryptionKey,
                 std::move(fileAttributes), filePath, version);
+            if (uploaddiag::Enabled())
+            {
+                uploadContext->m_diagnosticQueuedNs = uploaddiag::Now();
+                uploaddiag::Max(uploaddiag::peakPendingBytes,
+                    uploaddiag::pendingBytes.fetch_add(bufferSizeToSend) + bufferSizeToSend);
+            }
             m_uploadQueue.push(std::move(uploadContext));
         }
 

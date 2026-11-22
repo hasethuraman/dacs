@@ -77,6 +77,7 @@ class CacheUploadManager
             std::unique_ptr<FileAttributes>     m_fileAttributes;
             const std::string                   m_strFilePath;
             const std::string                   m_strVersion;
+            uint64_t                           m_diagnosticQueuedNs = 0;
         };
 
         std::atomic_uint64_t                           m_uploadBufferMemory;
@@ -96,6 +97,8 @@ class CacheUploadManager
         std::atomic_bool                               m_stop;
 
         std::shared_ptr<CacheClientImpl>               m_spCacheClientImpl;
+        uint64_t m_diagnosticId = 0;
+        std::atomic<uint64_t> m_diagnosticRequests{0}, m_diagnosticBytes{0}, m_diagnosticFailures{0};
 
         void UploadWorker();
         bool StartUpload(std::unique_ptr<UploadContext> uploadContext);
