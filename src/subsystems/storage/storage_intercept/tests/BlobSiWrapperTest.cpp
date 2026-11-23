@@ -17,6 +17,7 @@
 #include "TestBase.h"
 #include "StorageInterceptConstants.h"
 #include "StorageInterceptConfig.h"
+#include "UploadDiagnostics.h"
 #include <gtest/gtest.h>
 #include <climits>
 #include <cstdlib>
@@ -84,10 +85,12 @@ protected:
 
 TEST_F(BlobSiWrapperTest, NullAccountReturnsError)
 {
+    const auto calls = uploaddiag::counters[uploaddiag::SiPread].calls.load();
     char error_buf[512] = {};
     char buf[10];
     ssize_t ret = blob_read(nullptr, "container", "blob", buf, 0, 10, error_buf, sizeof(error_buf));
     EXPECT_EQ(ret, -1);
+    EXPECT_EQ(uploaddiag::counters[uploaddiag::SiPread].calls.load(), calls);
 }
 
 TEST_F(BlobSiWrapperTest, NullContainerReturnsError)
@@ -176,11 +179,29 @@ TEST_F(BlobSiWrapperTest, SuccessfulRead)
 
     char buf[64] = {};
     char error_buf[512] = {};
+    const auto calls = uploaddiag::counters[uploaddiag::SiPread].calls.load();
+    const auto first = readpressure::next.load();
     ssize_t ret = blob_read(TEST_ACCOUNT, TEST_CONTAINER, "model/weights.bin",
                             buf, 0, content.size(), error_buf, sizeof(error_buf));
 
     EXPECT_EQ(ret, static_cast<ssize_t>(content.size())) << "error: " << error_buf;
     EXPECT_EQ(std::string(buf, content.size()), content);
+    EXPECT_EQ(uploaddiag::counters[uploaddiag::SiPread].calls.load() - calls,
+        uploaddiag::Enabled() ? 1U : 0U);
+    if (uploaddiag::Enabled() && readpressure::Enabled())
+    {
+        unsigned matched = 0;
+        for (auto index = first; index < readpressure::next.load(); ++index)
+        {
+            const auto& event = readpressure::events[index];
+            if (!event.ready.load(std::memory_order_acquire)) continue;
+            if (!event.stage || std::strcmp(event.stage, "si_pread") != 0) continue;
+            EXPECT_EQ(event.bytes, content.size());
+            EXPECT_LE(event.startNs, event.endNs);
+            ++matched;
+        }
+        EXPECT_EQ(matched, 1U);
+    }
 }
 
 TEST_F(BlobSiWrapperTest, ReadWithOffset)

@@ -50,7 +50,7 @@ enum Stage
     AlignedAlloc, AlignedFree, ServerUpload, ServerBufferAlloc, ServerBufferFree,
     ServerRecv, ServerWrite, ServerFsync, ServerMetadata, ServerReply,
     ServerRename, ServerIndex, ServerTempCreate, ServerFileClose, ServerFdatasync, Drain,
-    ProbeConnect, ProbeSend, ProbeResponse, UploadIdleWait, ReplayWait, Count
+    ProbeConnect, ProbeSend, ProbeResponse, UploadIdleWait, ReplayWait, SiPread, Count
 };
 
 inline constexpr std::array<const char*, Count> stageNames = {
@@ -60,7 +60,7 @@ inline constexpr std::array<const char*, Count> stageNames = {
     "server_buffer_alloc", "server_buffer_free", "server_recv", "server_write",
     "server_fsync", "server_metadata", "server_reply", "server_rename",
     "server_index", "server_temp_create", "server_file_close", "server_fdatasync", "drain",
-    "probe_connect", "probe_send", "probe_response", "upload_idle_wait", "replay_wait"};
+    "probe_connect", "probe_send", "probe_response", "upload_idle_wait", "replay_wait", "si_pread"};
 
 inline bool Enabled()
 {
@@ -223,7 +223,7 @@ public:
             counter.firstNs.compare_exchange_strong(first, m_start, std::memory_order_relaxed);
             Max(counter.peakActive, counter.active.fetch_add(1, std::memory_order_relaxed) + 1);
             if (m_stage == Upload) inFlightBytes.fetch_add(m_bytes, std::memory_order_relaxed);
-            if (m_stage == Read || m_stage == Probe || m_stage == Blob || m_stage == ProbeResponse || m_stage == Upload)
+            if (m_stage == Read || m_stage == Probe || m_stage == Blob || m_stage == ProbeResponse || m_stage == Upload || m_stage == SiPread)
                 m_pressure = readpressure::Begin(stageNames[m_stage], m_bytes, m_start,
                     pendingBytes.load(), roleNames[m_role]);
         }

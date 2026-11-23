@@ -488,7 +488,9 @@ ssize_t blob_read(
     }
 
     char* pread_error = nullptr;
+    uploaddiag::Scope preadTimer(uploaddiag::SiPread, length);
     ssize_t bytes_read = SI_pread(fd, buf, length, static_cast<off64_t>(offset), &pread_error);
+    preadTimer.Stop();
 
     // Always close the fd after reading
     char* close_error = nullptr;
