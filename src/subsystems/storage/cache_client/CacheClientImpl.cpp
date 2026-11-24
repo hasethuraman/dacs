@@ -320,7 +320,6 @@ CacheClientStatus CacheClientImpl::Upload(
 
         if(m_bEnableCalculateChecksum)
         {
-            uploaddiag::Scope checksumTimer(uploaddiag::Checksum, nBufferLength);
             auto checksumCalculator = ChecksumFactory::GetChecksumStrategyInstance(m_checksumAlgorithm);   
             if(checksumCalculator == nullptr)
             {
@@ -368,16 +367,13 @@ CacheClientStatus CacheClientImpl::Upload(
             return CacheClientStatus::INTERNAL_ERROR;
         }
         LOG_DEBUG_REQID("Cache server hostname for file: {} is {}", *uploadRequest, strCacheKey, hostname);
-        uploaddiag::Scope connectTimer(uploaddiag::Connect);
         std::unique_ptr<IConnection> serverConnection = m_spConnectionManager->GetConnection(hostname);
-        connectTimer.Stop();
         if(serverConnection.get() == nullptr)
         {
             LOG_WARN_REQID("couldn't get server connection, ignoring upload for file: {}", *uploadRequest, strCacheKey);
             return CacheClientStatus::INTERNAL_ERROR;
         }
 
-        uploaddiag::Scope sendTimer(uploaddiag::Send, nBufferLength);
         bool bRet = false;
         if(nBufferLength > 0)
         {
@@ -402,8 +398,6 @@ CacheClientStatus CacheClientImpl::Upload(
             return CacheClientStatus::INTERNAL_ERROR;
         }
 
-        sendTimer.Stop();
-        uploaddiag::Scope responseTimer(uploaddiag::Response);
         std::string strResponse;
         if(!ReadMessageFromRemote(serverConnection.get(), strResponse))
         {
@@ -412,7 +406,6 @@ CacheClientStatus CacheClientImpl::Upload(
             return CacheClientStatus::INTERNAL_ERROR;
         }
 
-        responseTimer.Stop();
         UploadResponse response;
         if(!response.ParseFromString(strResponse))
         {
@@ -460,7 +453,6 @@ CacheClientStatus CacheClientImpl::Upload(
 
         // We reuse connection only for success, because if the server has closed the connection
         // but another client operation reuses it, that operation will fail due to connection reset.
-        uploaddiag::Scope releaseTimer(uploaddiag::Release);
         m_spConnectionManager->ReleaseConnection(
             hostname,
             std::move(serverConnection),
@@ -574,9 +566,7 @@ CacheClientStatus CacheClientImpl::Download(
     }
     LOG_DEBUG_REQID("Cache server hostname for file: {} is {}", *downloadRequest, strCacheKey, hostname);
 
-    uploaddiag::Scope probeConnectTimer(uploaddiag::ProbeConnect, *nLength);
     std::unique_ptr<IConnection> serverConnection = m_spConnectionManager->GetConnection(hostname);
-    probeConnectTimer.Stop();
     if(!serverConnection.get())
     {
         LOG_WARN_REQID(
@@ -588,9 +578,7 @@ CacheClientStatus CacheClientImpl::Download(
     }
     bool discardConnection = false;
 
-    uploaddiag::Scope probeSendTimer(uploaddiag::ProbeSend, *nLength);
     const bool requestSent = SendMessageToRemoteFinal(serverConnection.get(), request);
-    probeSendTimer.Stop();
     if(!requestSent)
     {
         LOG_WARN_CACHECLIENT_EXTENDED(
@@ -601,9 +589,7 @@ CacheClientStatus CacheClientImpl::Download(
     }
 
     std::string responseMessage;
-    uploaddiag::Scope probeResponseTimer(uploaddiag::ProbeResponse, *nLength);
     const bool responseRead = ReadMessageFromRemote(serverConnection.get(), responseMessage);
-    probeResponseTimer.Stop();
     if(!responseRead)
     {
         LOG_WARN_CACHECLIENT_EXTENDED(

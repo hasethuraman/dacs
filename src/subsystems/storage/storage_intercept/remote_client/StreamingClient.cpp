@@ -867,10 +867,10 @@ ssize_t StreamingClient::ReadChunkAndCopyToBuffer(
             bufSize);
         if (copySize > 0)
         {
-            uploaddiag::Copy(
+            std::memcpy(
                 (char*)pUserBuf,
                 readChunkData->Buffer.get() + chunkCopyOffset,
-                copySize, uploaddiag::ReturnCopy);
+                copySize);
         }
         LOG_DEBUG("Copied into caller buffer. chunkOffset={} chunkCopyOffset={} copySize={}",
             chunkOffset,
@@ -1010,8 +1010,8 @@ std::optional<ssize_t> StreamingClient::TrySubChunkRead(
     {
         const size_t availableBytes = prefetchResult->BufferSize - chunkCopyOffset;
         const size_t copySize = std::min(bufSize, availableBytes);
-        uploaddiag::Copy(pUserBuf, prefetchResult->Buffer.get() + chunkCopyOffset,
-            copySize, uploaddiag::ReturnCopy);
+        std::memcpy(pUserBuf, prefetchResult->Buffer.get() + chunkCopyOffset,
+            copySize);
         m_nReadChunksSubChunk++;
         m_nReadChunksTotal++;
         m_nReadChunksPrefetchCache++;
@@ -1075,8 +1075,8 @@ std::optional<ssize_t> StreamingClient::TrySubChunkRead(
     const size_t copySize = std::min(bufSize, availableBytes);
     if (copySize > 0)
     {
-        uploaddiag::Copy(pUserBuf, remoteReadData->Buffer.get() + chunkCopyOffset,
-            copySize, uploaddiag::ReturnCopy);
+        std::memcpy(pUserBuf, remoteReadData->Buffer.get() + chunkCopyOffset,
+            copySize);
     }
     m_nReadChunksSubChunk++;
     m_nReadChunksTotal++;
@@ -1202,9 +1202,9 @@ std::shared_ptr<const FileData> StreamingClient::ReadChunkImpl(
                 nullptr,
                 false /* setToZeros */);
 
-        uploaddiag::Copy(bufferForCacheUpload->Buffer.get(),
+        std::memcpy(bufferForCacheUpload->Buffer.get(),
                remoteReadData->Buffer.get(),
-               remoteReadData->BufferSize, uploaddiag::PartCopy);
+               remoteReadData->BufferSize);
     }
 
     // upload to cache server if this client owns the cache key

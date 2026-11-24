@@ -45,21 +45,6 @@ TEST(CpuDiagnosticsTest, NestedCpuIsExclusiveAndErrnoIsPreserved)
     EXPECT_EQ(uploaddiag::clockErrors.load(), 0U);
 }
 
-TEST(CpuDiagnosticsTest, CopyPreservesOwnedBytesAndAttributesTheRole)
-{
-    std::array<unsigned char, 128> source, destination;
-    source.fill(37);
-    const auto before = uploaddiag::roleCounters[uploaddiag::Replay][uploaddiag::PartCopy].calls.load();
-    {
-        uploaddiag::RoleScope role(uploaddiag::Replay);
-        uploaddiag::Copy(destination.data(), source.data(), source.size(), uploaddiag::PartCopy);
-    }
-    source.fill(0);
-    for (const auto value : destination) EXPECT_EQ(value, 37);
-    EXPECT_EQ(uploaddiag::roleCounters[uploaddiag::Replay][uploaddiag::PartCopy].calls.load() - before,
-        uploaddiag::Enabled() ? 1U : 0U);
-}
-
 TEST(CpuDiagnosticsTest, ExceptionRestoresScopeAndRole)
 {
     EXPECT_THROW(([] {
@@ -181,4 +166,89 @@ TEST(CpuDiagnosticsTest, OperationCompletionBuffersWithoutAutomaticEmission)
     EXPECT_GT(readpressure::next.load(), before);
     readpressure::Dump(false);
     EXPECT_EQ(readpressure::dumpedIndex, readpressure::next.load());
+}
+
+TEST(CpuDiagnosticsTest, BlobReadSamplesContainNativeHundredCallMeansAndPartialTail)
+{
+    {
+        std::lock_guard<std::mutex> lock(uploaddiag::blobReadMutex);
+        uploaddiag::blobReadPending = {};
+        uploaddiag::blobReadNext = uploaddiag::blobReadDumped = uploaddiag::blobReadDropped = 0;
+    }
+    for (unsigned call = 0; call < 250; ++call)
+        uploaddiag::RecordBlobRead(1000 + call * 1000, 2000 + call * 1000, 16, 500);
+    ASSERT_EQ(uploaddiag::blobReadNext, 2U);
+    EXPECT_EQ(uploaddiag::blobReadPending.calls, 50U);
+    const auto& first = uploaddiag::blobReadBatches[0];
+    EXPECT_EQ(first.calls, 100U);
+    EXPECT_EQ(first.bytes, 1600U);
+    EXPECT_DOUBLE_EQ(first.meanWallMs, 0.001);
+    EXPECT_DOUBLE_EQ(first.meanCpuMs, 0.0005);
+    EXPECT_DOUBLE_EQ(first.cpuPercent, 50.0);
+    uploaddiag::DumpBlobReadBatches(false);
+    EXPECT_EQ(uploaddiag::blobReadPending.calls, 50U);
+    uploaddiag::DumpBlobReadBatches(true);
+    ASSERT_EQ(uploaddiag::blobReadNext, 3U);
+    EXPECT_EQ(uploaddiag::blobReadBatches[2].calls, 50U);
+    EXPECT_DOUBLE_EQ(uploaddiag::blobReadBatches[2].meanWallMs, 0.001);
+    uploaddiag::DumpBlobReadBatches(true);
+    EXPECT_EQ(uploaddiag::blobReadNext, 3U);
+}
+
+TEST(CpuDiagnosticsTest, BlobReadSamplesPoolThreadsWithoutClampingCpuConsumption)
+{
+    {
+        std::lock_guard<std::mutex> lock(uploaddiag::blobReadMutex);
+        uploaddiag::blobReadPending = {};
+        uploaddiag::blobReadNext = uploaddiag::blobReadDumped = uploaddiag::blobReadDropped = 0;
+    }
+    std::vector<std::thread> threads;
+    for (unsigned index = 0; index < 4; ++index)
+        threads.emplace_back([] {
+            for (unsigned call = 0; call < 25; ++call)
+                uploaddiag::RecordBlobRead(1000, 2000, 16, 500);
+        });
+    for (auto& thread : threads) thread.join();
+    ASSERT_EQ(uploaddiag::blobReadNext, 1U);
+    EXPECT_EQ(uploaddiag::blobReadBatches[0].calls, 100U);
+    EXPECT_DOUBLE_EQ(uploaddiag::blobReadBatches[0].cpuPercent, 5000.0);
+}
+
+TEST(CpuDiagnosticsTest, BlobReadSampleCapacityLossIsExplicit)
+{
+    std::lock_guard<std::mutex> lock(uploaddiag::blobReadMutex);
+    uploaddiag::blobReadNext = uploaddiag::BlobReadBatchCapacity;
+    uploaddiag::blobReadDumped = uploaddiag::blobReadNext;
+    uploaddiag::blobReadDropped = 0;
+    uploaddiag::blobReadPending = {100, 1600, 1000, 2000, 100000, 50000};
+    uploaddiag::CompleteBlobReadBatch();
+    EXPECT_EQ(uploaddiag::blobReadDropped, 100U);
+    EXPECT_EQ(uploaddiag::blobReadPending.calls, 0U);
+    uploaddiag::blobReadNext = uploaddiag::blobReadDumped = uploaddiag::blobReadDropped = 0;
+}
+
+TEST(CpuDiagnosticsTest, BlobReadScopeSamplesUseNativeClocks)
+{
+    const auto batches = uploaddiag::blobReadNext;
+    const auto pending = uploaddiag::blobReadPending.calls;
+    {
+        uploaddiag::RoleScope role(uploaddiag::Foreground);
+        for (unsigned call = 0; call < 250; ++call)
+        {
+            uploaddiag::Scope scope(uploaddiag::Wrapper, 16);
+            volatile uint64_t value = 1;
+            for (unsigned iteration = 0; iteration < 1000; ++iteration)
+                value = value * 1664525 + 1013904223;
+        }
+    }
+    if (!uploaddiag::Enabled())
+    {
+        EXPECT_EQ(uploaddiag::blobReadNext, batches);
+        EXPECT_EQ(uploaddiag::blobReadPending.calls, pending);
+        return;
+    }
+    EXPECT_EQ(uploaddiag::blobReadNext - batches, (pending + 250) / 100);
+    EXPECT_EQ(uploaddiag::blobReadPending.calls, (pending + 250) % 100);
+    EXPECT_EQ(uploaddiag::clockErrors.load(), 0U);
+    uploaddiag::Log("shutdown");
 }

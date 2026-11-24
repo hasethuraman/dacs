@@ -77,7 +77,6 @@ class CacheUploadManager
             std::unique_ptr<FileAttributes>     m_fileAttributes;
             const std::string                   m_strFilePath;
             const std::string                   m_strVersion;
-            uint64_t                           m_diagnosticQueuedNs = 0;
         };
 
         std::atomic_uint64_t                           m_uploadBufferMemory;

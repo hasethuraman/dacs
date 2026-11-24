@@ -470,9 +470,7 @@ ssize_t blob_read(
 
     // Open, read, and close per call — no fd caching
     char* open_error = nullptr;
-    uploaddiag::Scope openTimer(uploaddiag::Open);
     int fd = SI_open(cache_path.c_str(), O_RDONLY, 0, &open_error);
-    openTimer.Stop();
     if (fd < 0)
     {
         if (open_error)
@@ -488,15 +486,11 @@ ssize_t blob_read(
     }
 
     char* pread_error = nullptr;
-    uploaddiag::Scope preadTimer(uploaddiag::SiPread, length);
     ssize_t bytes_read = SI_pread(fd, buf, length, static_cast<off64_t>(offset), &pread_error);
-    preadTimer.Stop();
 
     // Always close the fd after reading
     char* close_error = nullptr;
-    uploaddiag::Scope closeTimer(uploaddiag::Close);
     SI_close(fd, &close_error);
-    closeTimer.Stop();
     if (close_error)
     {
         LOG_WARN("blob_read: SI_close failed for '{}': {}", cache_path, close_error);

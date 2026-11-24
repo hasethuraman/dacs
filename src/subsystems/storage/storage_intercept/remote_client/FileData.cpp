@@ -40,11 +40,9 @@ FileData::FileData(off64_t offset, size_t bufSize, char* pUserBuf, bool setToZer
             LOG_WARN("Client requested unaligned size. bufSize={}, allocSize={}", bufSize, allocSize);
         }
 
-        uploaddiag::Scope allocationTimer(uploaddiag::AlignedAlloc, allocSize);
         Buffer = unique_aligned_buffer(
             (char *)aligned_alloc(BufferAlignmentSize, allocSize),
             FreeAlignedBuffer);
-        allocationTimer.Stop();
         STORAGE_ASSERT(Buffer,
             "Failed to create aligned buffer. alignment={} bufSize={} allocSize={}",
             BufferAlignmentSize, bufSize, allocSize);
@@ -60,7 +58,6 @@ void FileData::FreeAlignedBuffer(char* buffer)
 {
     if (buffer)
     {
-        uploaddiag::Scope freeTimer(uploaddiag::AlignedFree);
         free(buffer);
     }
 }

@@ -218,9 +218,6 @@ void CacheUploadManager::UploadWorker()
             size_t bufferSizeToSend = uploadContext->m_fileData.get() ? uploadContext->m_fileData->BufferSize : 0;
             if (uploaddiag::Enabled())
             {
-                if (uploadContext->m_diagnosticQueuedNs != 0)
-                    uploaddiag::Record(uploaddiag::QueueWait, bufferSizeToSend,
-                        uploaddiag::Now() - uploadContext->m_diagnosticQueuedNs);
                 uploaddiag::pendingBytes.fetch_sub(bufferSizeToSend);
             }
             StartUpload(std::move(uploadContext));
@@ -241,8 +238,6 @@ bool CacheUploadManager::Upload(
     const std::string& filePath,
     const std::string& version)
 {
-    uploaddiag::Scope enqueueTimer(uploaddiag::Enqueue,
-        fileData ? fileData->BufferSize : 0);
     bool useSync = m_enableSyncUpload || isWrite; // Writes to cache are always sync
 
     if (useSync)
@@ -271,7 +266,6 @@ bool CacheUploadManager::Upload(
                 std::move(fileAttributes), filePath, version);
             if (uploaddiag::Enabled())
             {
-                uploadContext->m_diagnosticQueuedNs = uploaddiag::Now();
                 uploaddiag::Max(uploaddiag::peakPendingBytes,
                     uploaddiag::pendingBytes.fetch_add(bufferSizeToSend) + bufferSizeToSend);
             }
